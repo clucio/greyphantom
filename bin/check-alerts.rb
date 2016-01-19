@@ -5,7 +5,7 @@
 #  check-alerts
 #
 #  DESCRIPTION:
-#    Check Opscenter for active alerts and split into individual events
+#    Check Ambari for active alerts and split into individual events
 #
 #  OUTPUT:
 #    plain text
@@ -23,7 +23,7 @@
 #  NOTES:
 #
 #  LICENSE:
-#  Originally by Timothy Given  Date: 10/09/2015#
+#  Originally by Carmelo Lucio  Date: 01/19/2016#
 #  Released under the same terms as Sensu (the MIT License); see LICENSE 
 #  for details.
 #
@@ -31,37 +31,37 @@ require 'sensu-plugin/check/cli'
 require 'rest-client'
 require 'json'
 
-class CheckOpscenterAlerts < Sensu::Plugin::Check::CLI
+class CheckAmbariAlerts < Sensu::Plugin::Check::CLI
   option :port,
          short: '-P PORT',
          long: '--port PORT',
-         description: 'Opscenter Port',
-         default: 8888
+         description: 'Ambari Port',
+         default: 8080
 
   option :host,
          short: '-h HOST',
          long: '--host HOST',
-         description: 'Opscenter host',
+         description: 'Ambari host',
          default: '127.0.0.1'
 
   option :auth_enabled,
          short: '-a',
          long: '--auth',
-         description: 'Set if auth is enabled for Cassandra/Opscenter',
+         description: 'Set if auth is enabled for Ambari',
          boolean: true,
-         default: false
+         default: true
  
   option :username,
          short: '-u USERNAME',
          long: '--user USERNAME',
-         description: 'Opscenter user',
+         description: 'Ambari user',
          default: 'sensu'
 
   option :password,
          short: '-p PASSWORD',
          long: '--password PASSWORD',
-         description: 'Opscenter user password',
-         default: ''
+         description: 'Ambari user password',
+         default: 'sensu'
 
   option :sensu_client_host,
          long: '--sensu_client_host SENSU_HOST',
@@ -74,12 +74,13 @@ class CheckOpscenterAlerts < Sensu::Plugin::Check::CLI
          default: 3030
 
 
-  # Execute Opcenter API call
-  def opscenter_cmd(host, port, uri, request_type, post_data = nil)
+  # Execute Ambari API call
+  def ambari_cmd(host, port, uri, request_type, post_data = nil)
     begin
       case request_type
       when 'GET'
-        return JSON.parse RestClient.get "http://#{host}:#{port}#{uri}" 
+        return JSON.parse RestClient::Request.execute method: :get, url: "http://#{host}:#{port}#{uri}", user: "#{username}", password: "#{password}" 
+        #return JSON.parse RestClient.get "http://#{host}:#{port}#{uri}" 
       when 'POST'
         ## to be added
       else
@@ -104,21 +105,21 @@ class CheckOpscenterAlerts < Sensu::Plugin::Check::CLI
   end
 
 
-  # Get alerts from opscenter, and send each back through sensu client
+  # Get alerts from ambari, and send each back through sensu client
   def get_alerts(host, port, cluster_id, sensu_client_host, sensu_client_port)
-    uri = "/#{cluster_id}/alerts/fired"
-    alert_list = opscenter_cmd(host, port, uri, "GET")
+    uri = "/api/v1/clusters/#{cluster_id}/alerts"
+    alert_list = ambari_cmd(host, port, uri, "GET")
 
     # build list of sensu alerts
-    alert_list.map do |opscenter_alert|
+    alert_list.map do |ambari_alert|
       # Get alert rule info
-      uri = "/#{cluster_id}/alert-rules/#{opscenter_alert['alert_rule_id']}"
-      alert_rule = opscenter_cmd(host, port, uri, "GET")
+      uri = "/#{cluster_id}/alerts/#{ambari_alert['alert_rule_id']}"
+      alert_rule = ambari_cmd(host, port, uri, "GET")
       
       # Build sensu alert
       sensu_alert = { name: "#{cluster_id}", 
-                      address: "#{opscenter_alert['node']}",
-                      datacenter: "#{opscenter_alert['dc']}",
+                      address: "#{ambari_alert['host_name']}",
+                      datacenter: "#{ambari_alert['dc']}",
                       output: "#{alert_rule['type']}",
                       status: 2
       }
@@ -132,18 +133,18 @@ class CheckOpscenterAlerts < Sensu::Plugin::Check::CLI
 
   # Check entry point
   def run
-    opscenter_host = config[:host]
-    opscenter_port = config[:port]
+    ambari_host = config[:host]
+    ambari_port = config[:port]
     sensu_client_host = config[:sensu_client_host]
     sensu_client_port = config[:sensu_client_port]
 
     ## Get list of clusters
-    uri = "/cluster-configs"
-    cluster_list = opscenter_cmd( opscenter_host, opscenter_port, uri, "GET" )
+    uri = "/clusters"
+    cluster_list = ambari_cmd( ambari_host, ambari_port, uri, "GET" )
 
     # Get alerts for each cluster
     cluster_list.each do |cluster_id, attributes|
-      get_alerts( opscenter_host, opscenter_port, cluster_id, sensu_client_host, sensu_client_port )
+      get_alerts( ambari_host, ambari_port, cluster_id, sensu_client_host, sensu_client_port )
     end
 
     ok
