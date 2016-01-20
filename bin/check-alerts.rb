@@ -55,13 +55,13 @@ class CheckAmbariAlerts < Sensu::Plugin::Check::CLI
          short: '-u USERNAME',
          long: '--user USERNAME',
          description: 'Ambari user',
-         default: 'sensu'
+         default: 'user'
 
   option :password,
          short: '-p PASSWORD',
          long: '--password PASSWORD',
          description: 'Ambari user password',
-         default: 'sensu'
+         default: 'password'
 
   option :sensu_client_host,
          long: '--sensu_client_host SENSU_HOST',
@@ -75,12 +75,11 @@ class CheckAmbariAlerts < Sensu::Plugin::Check::CLI
 
 
   # Execute Ambari API call
-  def ambari_cmd(host, port, uri, request_type, post_data = nil)
+  def ambari_cmd(host, port, uri, username, password, request_type, post_data = nil)
     begin
       case request_type
       when 'GET'
-        return JSON.parse RestClient::Request.execute method: :get, url: "http://#{host}:#{port}#{uri}", user: "#{username}", password: "#{password}" 
-        #return JSON.parse RestClient.get "http://#{host}:#{port}#{uri}" 
+        return JSON.parse RestClient::Request.execute method: :get, url: "http://#{host}:#{port}/api/v1#{uri}", user: "#{username}", password: "#{password}" 
       when 'POST'
         ## to be added
       else
@@ -106,27 +105,39 @@ class CheckAmbariAlerts < Sensu::Plugin::Check::CLI
 
 
   # Get alerts from ambari, and send each back through sensu client
-  def get_alerts(host, port, cluster_id, sensu_client_host, sensu_client_port)
-    uri = "/api/v1/clusters/#{cluster_id}/alerts"
-    alert_list = ambari_cmd(host, port, uri, "GET")
+  def get_alerts(host, port, cluster_name, username, password, sensu_client_host, sensu_client_port)
+    clustername = cluster_name.strip()
+    uri = "/clusters/#{clustername}/alerts"
+    alert_list = ambari_cmd(host, port, uri, username, password, "GET")
 
     # build list of sensu alerts
-    alert_list.map do |ambari_alert|
+    alert_list['items'].map do |ambari_alert|
       # Get alert rule info
-      uri = "/#{cluster_id}/alerts/#{ambari_alert['alert_rule_id']}"
-      alert_rule = ambari_cmd(host, port, uri, "GET")
+      uri = "/clusters/#{clustername}/alerts/#{ambari_alert['Alert']['id']}"
+      alert_item = ambari_cmd(host, port, uri, username, password, "GET")
       
-      # Build sensu alert
-      sensu_alert = { name: "#{cluster_id}", 
-                      address: "#{ambari_alert['host_name']}",
-                      datacenter: "#{ambari_alert['dc']}",
-                      output: "#{alert_rule['type']}",
+      # Build sensu alert (Ambari)
+      sensu_alert = { cluster: "#{clustername}", 
+                      host: "#{ambari_alert['Alert']['host_name']}",
+                      name: "#{ambari_alert['Alert']['definition_name']}",
+                      output: "#{alert_item['Alert']['label']}",
+                      state: "#{alert_item['Alert']['state']}",
                       status: 2
       }
-      
       # Forward alert directly to sensu client
-      puts sensu_alert
-      forward_alert( sensu_client_host, sensu_client_port, sensu_alert )
+      case sensu_alert[:state]
+      when "OK"
+         next
+      when "WARNING"
+         sensu_alert[:status] = 1
+         forward_alert( sensu_client_host, sensu_client_port, sensu_alert )
+      when "CRITICAL"
+         sensu_alert[:status] = 2
+         forward_alert( sensu_client_host, sensu_client_port, sensu_alert )
+      else
+         sensu_alert[:status] = 3
+         forward_alert( sensu_client_host, sensu_client_port, sensu_alert )
+      end
     end
   end
     
@@ -135,16 +146,19 @@ class CheckAmbariAlerts < Sensu::Plugin::Check::CLI
   def run
     ambari_host = config[:host]
     ambari_port = config[:port]
+    ambari_user = config[:username]
+    ambari_pass = config[:password]
     sensu_client_host = config[:sensu_client_host]
     sensu_client_port = config[:sensu_client_port]
 
     ## Get list of clusters
     uri = "/clusters"
-    cluster_list = ambari_cmd( ambari_host, ambari_port, uri, "GET" )
+    cluster_list = ambari_cmd( ambari_host, ambari_port, uri, ambari_user, ambari_pass, "GET" )
 
     # Get alerts for each cluster
-    cluster_list.each do |cluster_id, attributes|
-      get_alerts( ambari_host, ambari_port, cluster_id, sensu_client_host, sensu_client_port )
+    cluster_list['items'].each do |cluster_id|
+      cluster_name = "#{cluster_id['Clusters']['cluster_name']}\n"
+      get_alerts( ambari_host, ambari_port, cluster_name, ambari_user, ambari_pass, sensu_client_host, sensu_client_port )
     end
 
     ok
