@@ -135,8 +135,7 @@ class CheckAmbariAlerts < Sensu::Plugin::Check::CLI
          sensu_alert[:status] = 2
          forward_alert( sensu_client_host, sensu_client_port, sensu_alert )
       else
-         sensu_alert[:status] = 3
-         forward_alert( sensu_client_host, sensu_client_port, sensu_alert )
+         next
       end
     end
   end
